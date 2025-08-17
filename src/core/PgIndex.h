@@ -1,25 +1,29 @@
 ﻿#pragma once
-#include <string>
 #include <memory>
-#include <pqxx/pqxx> 
+#include <string>
 
-namespace pqxx { class connection; }
+// нужен полный тип pqxx::connection
+#include <pqxx/pqxx>
 
 class PgIndex {
 public:
-    using Rid = long long;
+    explicit PgIndex(const std::string& conn_str);
+    ~PgIndex();
 
-    PgIndex() = default;
-    explicit PgIndex(const std::string& conn);
-    ~PgIndex();                       // <— добавили явный деструктор (см. реализацию в .cpp)
+    bool IsConnected() const noexcept;
+    // Алиас для кода, который ожидает Connected()
+    bool Connected() const noexcept { return IsConnected(); }
 
-    bool Open(const std::string& conn);
-    bool Connected() const;
+    // Минимальное API, которое дергает PacsServer
+    long long UpsertResource(const std::string& type,
+        const std::string& uid);
 
-    // Заглушки под вызовы сервера
-    Rid  UpsertResource(const std::string& kind, const std::string& uid);
-    void UpsertIdentifier(Rid rid, const std::string& system, const std::string& value);
-    void AttachDicom(Rid rid, const std::wstring& path);
+    void UpsertIdentifier(long long rid,
+        const std::string& system,
+        const std::string& value);
+
+    bool AttachDicom(long long instanceRid,
+        const std::string& pathOnDisk);
 
 private:
     std::unique_ptr<pqxx::connection> conn_;
