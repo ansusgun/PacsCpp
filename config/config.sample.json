@@ -1,0 +1,8 @@
+{
+  "AETitle": "PACS_CPP",
+  "Port": 11112,
+  "StoragePath": "C:/PACS/Storage",
+  "PostgresUri": "postgresql://orthanc:orthanc@localhost:5432/orthanc",
+  "MaxPdu": 4194304,
+  "AcceptedAEs": ["*"]
+}
