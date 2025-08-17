@@ -1,73 +1,94 @@
 #include "PgIndex.h"
-#include <algorithm>
 
-static std::string ToUpper(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(),
-        [](unsigned char c) { return (char)std::toupper(c); });
-    return s;
+#include <filesystem>
+#include <pqxx/pqxx>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
+
+namespace fs = std::filesystem;
+
+static std::shared_ptr<spdlog::logger> get_logger() {
+    if (auto lg = spdlog::get("pacs")) return lg;
+    std::wstring logDir = L"C:\\ProgramData\\PacsCpp\\logs";
+    fs::create_directories(logDir);
+    auto logPath = fs::path(logDir) / L"pacs_service.log";
+    auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logPath.string(), true);
+    auto lg = std::make_shared<spdlog::logger>("pacs", sink);
+    spdlog::register_logger(lg);
+    lg->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+    return lg;
 }
 
-PgIndex::PgIndex(const std::string& uri) : conn_(uri) {}
+PgIndex::~PgIndex() = default;                    // <Ч деструктор определЄн тут, тип pqxx::connection уже полный
 
-long PgIndex::UpsertResource(int type, std::optional<long> parent, const std::string& publicId) {
-    pqxx::work tx(conn_);
-    long id;
-    if (parent) {
-        // параметризованный запрос с возвращаемой строкой
-        auto row = tx.exec_params1(
-            "INSERT INTO Resources(resource_type, parent_id, public_id) "
-            "VALUES ($1, $2, $3) "
-            "ON CONFLICT (public_id) DO UPDATE SET resource_type = EXCLUDED.resource_type "
-            "RETURNING internal_id",
-            type, *parent, publicId
-        );
-        id = row[0].as<long>();
+PgIndex::PgIndex(const std::string& conn) {
+    Open(conn);
+}
+
+bool PgIndex::Open(const std::string& conn) {
+    try {
+        if (conn.empty()) {
+            get_logger()->warn("DB connection string is empty. Database features are disabled.");
+            conn_.reset();
+            return false;
+        }
+        conn_ = std::make_unique<pqxx::connection>(conn);
+        if (!conn_->is_open()) {
+            get_logger()->error("DB connection failed: connection is not open.");
+            conn_.reset();
+            return false;
+        }
+        get_logger()->info("DB connected: {}", conn_->dbname());
+        return true;
     }
-    else {
-        auto row = tx.exec_params1(
-            "INSERT INTO Resources(resource_type, parent_id, public_id) "
-            "VALUES ($1, NULL, $2) "
-            "ON CONFLICT (public_id) DO UPDATE SET resource_type = EXCLUDED.resource_type "
-            "RETURNING internal_id",
-            type, publicId
-        );
-        id = row[0].as<long>();
+    catch (const std::exception& e) {
+        get_logger()->error("DB connect exception: {}", e.what());
+        conn_.reset();
+        return false;
     }
-    tx.commit();
-    return id;
 }
 
-
-void PgIndex::UpsertIdentifier(long rid, int g, int e, const std::string& valUpper) {
-    pqxx::work tx(conn_);
-    tx.exec_params(
-        "INSERT INTO DicomIdentifiers(id, tag_group, tag_element, value) "
-        "VALUES ($1,$2,$3,$4) "
-        "ON CONFLICT (id, tag_group, tag_element) DO UPDATE SET value = EXCLUDED.value",
-        rid, g, e, ToUpper(valUpper)
-    );
-    tx.commit();
+bool PgIndex::Connected() const {
+    return conn_ && conn_->is_open();
 }
 
-void PgIndex::UpsertMainTag(long rid, int g, int e, const std::string& val) {
-    pqxx::work tx(conn_);
-    tx.exec_params(
-        "INSERT INTO MainDicomTags(id, tag_group, tag_element, value) "
-        "VALUES ($1,$2,$3,$4) "
-        "ON CONFLICT (id, tag_group, tag_element) DO UPDATE SET value = EXCLUDED.value",
-        rid, g, e, val
-    );
-    tx.commit();
+PgIndex::Rid PgIndex::UpsertResource(const std::string& kind, const std::string& uid) {
+    if (!Connected()) {
+        get_logger()->warn("UpsertResource({}, {}) skipped: DB not connected.", kind, uid);
+        return 0;
+    }
+    try {
+        // TODO: реальный SQL
+        return 0;
+    }
+    catch (const std::exception& e) {
+        get_logger()->error("UpsertResource exception: {}", e.what());
+        return 0;
+    }
 }
 
-void PgIndex::AttachDicom(long rid, const std::string& uuid, std::uint64_t size) {
-    pqxx::work tx(conn_);
-    tx.exec_params(
-        "INSERT INTO AttachedFiles(id, file_type, uuid, compressed_size, uncompressed_size) "
-        "VALUES ($1, 0, $2, $3, $3) "
-        "ON CONFLICT (id, file_type) DO UPDATE SET uuid = EXCLUDED.uuid, "
-        "compressed_size = EXCLUDED.compressed_size, uncompressed_size = EXCLUDED.uncompressed_size",
-        rid, uuid, (long long)size
-    );
-    tx.commit();
+void PgIndex::UpsertIdentifier(Rid rid, const std::string& system, const std::string& value) {
+    if (!Connected()) {
+        get_logger()->warn("UpsertIdentifier(rid={}, {}, {}) skipped: DB not connected.", rid, system, value);
+        return;
+    }
+    try {
+        // TODO: реальный SQL
+    }
+    catch (const std::exception& e) {
+        get_logger()->error("UpsertIdentifier exception: {}", e.what());
+    }
+}
+
+void PgIndex::AttachDicom(Rid rid, const std::wstring& path) {
+    if (!Connected()) {
+        get_logger()->warn("AttachDicom(rid={}, path=...) skipped: DB not connected.", rid);
+        return;
+    }
+    try {
+        // TODO: запись прив€зок
+    }
+    catch (const std::exception& e) {
+        get_logger()->error("AttachDicom exception: {}", e.what());
+    }
 }

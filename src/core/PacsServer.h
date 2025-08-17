@@ -1,24 +1,26 @@
-#pragma once
+﻿#pragma once
+#include <string>
+#include <thread>
+#include <atomic>
+
 #include "Config.h"
 #include "PgIndex.h"
-#include <atomic>
-#include <thread>
-#include <filesystem>
-#include <string>
 
 class PacsServer {
 public:
-	explicit PacsServer(const std::wstring& configPath);
-	~PacsServer();
+    explicit PacsServer(const Config& cfg);
+    ~PacsServer();
 
-	void Start();
-	void Stop();
+    void Start();
+    void Stop();
+    bool IsRunning() const;
 
 private:
-	void Run();
+    void Run();
 
-	std::filesystem::path storageRoot_;
-	Config cfg_;
-	std::atomic<bool> stop_{ false };
-	std::thread worker_;
+    std::atomic<bool> stop_{ false };
+    std::thread       worker_;
+    std::wstring      storageRoot_;
+    Config            cfg_;
+    PgIndex           index_;   // теперь есть конструктор по умолчанию и с conn string
 };

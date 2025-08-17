@@ -1,130 +1,66 @@
-#include "PacsServer.h"
+﻿#include "PacsServer.h"
 
-#include <dcmtk/dcmnet/scp.h>
-#include <dcmtk/dcmdata/dctk.h>
-#include <dcmtk/dcmdata/dcuid.h>
-#include <dcmtk/dcmnet/diutil.h>
-
-#include <random>
-#include <sstream>
-#include <iomanip>
 #include <filesystem>
-#include <string>
+#include <chrono>
+#include <thread>
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
-using namespace std;
+namespace fs = std::filesystem;
 
-static string ToUpper(string s) {
-    for (auto& c : s) c = (char)toupper((unsigned char)c);
-    return s;
+static std::shared_ptr<spdlog::logger> get_logger() {
+    if (auto lg = spdlog::get("pacs")) return lg;
+    std::wstring logDir = L"C:\\ProgramData\\PacsCpp\\logs";
+    fs::create_directories(logDir);
+    auto logPath = fs::path(logDir) / L"pacs_service.log";
+    auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logPath.string(), true);
+    auto lg = std::make_shared<spdlog::logger>("pacs", sink);
+    spdlog::register_logger(lg);
+    lg->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+    return lg;
 }
 
-static string NewUuid() {
-    random_device rd; mt19937_64 gen(rd()); uniform_int_distribution<uint64_t> d;
-    uint64_t a = d(gen), b = d(gen);
-    stringstream ss; ss << hex << setfill('0')
-        << setw(8) << (uint32_t)(a >> 32) << "-" << setw(4) << (uint16_t)(a >> 16) << "-" << setw(4) << (uint16_t)(a)
-        << "-" << setw(4) << (uint16_t)(b >> 48) << "-" << setw(12) << (uint64_t)(b & 0x0000FFFFFFFFFFFFULL);
-    return ss.str();
+PacsServer::PacsServer(const Config& cfg)
+    : storageRoot_(cfg.StorageRootW()),
+    cfg_(cfg),
+    index_(cfg.DbConnString()) // попытаемся подключиться к БД сразу
+{
+    fs::create_directories(storageRoot_);
 }
 
-static filesystem::path MakeStoragePath(const filesystem::path& root, const string& uuid) {
-    string a = ToUpper(uuid);
-    auto dir = root / a.substr(0, 2) / a.substr(2, 2);
-    filesystem::create_directories(dir);
-    return dir / a;
+PacsServer::~PacsServer() {
+    Stop();
 }
-
-// Minimal SCP that stores dataset and indexes it
-class StorageSCP : public DcmSCP {
-public:
-    StorageSCP(const filesystem::path& root, const string& pgUri)
-        : storageRoot_(root), index_(pgUri) {
-    }
-
-protected:
-    // DCMTK 3.6.9 signature
-    virtual OFCondition handleSTORERequest(
-        T_DIMSE_C_StoreRQ& reqMessage,
-        const T_ASC_PresentationContextID presID,
-        DcmDataset*& reqDataset)
-    {
-        (void)reqMessage; (void)presID;
-
-        // Save to temp file
-        const string tmpUuid = NewUuid();
-        const filesystem::path tmpPath = storageRoot_ / (L"tmp_" + std::wstring(tmpUuid.begin(), tmpUuid.end()));
-        DcmFileFormat ff(reqDataset);
-        ff.saveFile(string(tmpPath.string().begin(), tmpPath.string().end()).c_str(), EXS_Unknown);
-
-        // Extract UIDs
-        OFString studyUid, seriesUid, sopUid, patientId;
-        reqDataset->findAndGetOFString(DCM_StudyInstanceUID, studyUid);
-        reqDataset->findAndGetOFString(DCM_SeriesInstanceUID, seriesUid);
-        reqDataset->findAndGetOFString(DCM_SOPInstanceUID, sopUid);
-        reqDataset->findAndGetOFString(DCM_PatientID, patientId);
-
-        // Upsert hierarchy
-        auto patientRid = index_.UpsertResource(1, std::nullopt, "pat-" + ToUpper(patientId.c_str()));
-        auto studyRid = index_.UpsertResource(2, patientRid, "stu-" + ToUpper(studyUid.c_str()));
-        auto seriesRid = index_.UpsertResource(3, studyRid, "ser-" + ToUpper(seriesUid.c_str()));
-        auto instRid = index_.UpsertResource(4, seriesRid, "ins-" + ToUpper(sopUid.c_str()));
-
-        index_.UpsertIdentifier(instRid, 0x0020, 0x000D, studyUid.c_str());
-        index_.UpsertIdentifier(instRid, 0x0020, 0x000E, seriesUid.c_str());
-        index_.UpsertIdentifier(instRid, 0x0008, 0x0018, sopUid.c_str());
-        index_.UpsertIdentifier(instRid, 0x0010, 0x0020, patientId.c_str());
-
-        // Move into final storage path
-        string finalUuid = NewUuid();
-        auto finalPath = MakeStoragePath(storageRoot_, finalUuid);
-
-        std::error_code ec;
-        filesystem::rename(tmpPath, finalPath, ec);
-        if (ec) {
-            filesystem::copy_file(tmpPath, finalPath, filesystem::copy_options::overwrite_existing, ec);
-            filesystem::remove(tmpPath, ec);
-        }
-        auto size = filesystem::file_size(finalPath);
-        index_.AttachDicom(instRid, finalUuid, size);
-
-        return EC_Normal;
-    }
-
-private:
-    filesystem::path storageRoot_;
-    PgIndex index_;
-};
-
-PacsServer::PacsServer(const std::wstring& configPath)
-    : cfg_(Config::Load(configPath)),
-    storageRoot_(cfg_.storagePath) {
-}
-
-PacsServer::~PacsServer() { Stop(); }
 
 void PacsServer::Start() {
-    if (worker_.joinable()) return;
+    if (!index_.Connected()) {
+        get_logger()->error("PacsServer not started: no DB connection (check config.json: \"db_conn\").");
+        return;
+    }
+
+    if (worker_.joinable()) return; // уже запущен
+
     stop_ = false;
+    get_logger()->info("PacsServer starting...");
     worker_ = std::thread(&PacsServer::Run, this);
 }
 
 void PacsServer::Stop() {
     stop_ = true;
-    if (worker_.joinable()) worker_.join();
+    if (worker_.joinable()) {
+        worker_.join();
+        get_logger()->info("PacsServer stopped.");
+    }
+}
+
+bool PacsServer::IsRunning() const {
+    return worker_.joinable() && !stop_.load();
 }
 
 void PacsServer::Run() {
-    while (!stop_) {
-        StorageSCP scp(storageRoot_, cfg_.pgUri);
-        scp.setAETitle(cfg_.aeTitle.c_str());
-        scp.setPort(cfg_.port);
-        scp.setDIMSETimeout(60);
-        scp.setMaxReceivePDULength(cfg_.maxPdu);
-
-        OFCondition cond = scp.listen();
-        if (cond.bad()) {
-            // simple backoff
-            ::Sleep(1000);
-        }
+    get_logger()->info("PacsServer running. Storage: {}", std::string(storageRoot_.begin(), storageRoot_.end()));
+    // Заглушка рабочего цикла
+    while (!stop_.load()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 }

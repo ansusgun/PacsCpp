@@ -1,27 +1,18 @@
-﻿# Windows service
-add_executable(pacs_service WIN32
+﻿# Windows-сервис
+add_executable(pacs_service
   ServiceMain.cpp
 )
 
-
-target_include_directories(pacs_service PRIVATE ${CMAKE_SOURCE_DIR}/src/core)
-
-
-# Линки и дефайны
+# Не делаем WIN32_EXECUTABLE, чтобы был wmain, а не WinMain
 target_link_libraries(pacs_service
   PRIVATE
     pacs_core
-    advapi32        # API управления службами
+    spdlog::spdlog
+    libpqxx::pqxx         # <-- было pqxx::pqxx
+    Advapi32
 )
 
-# Используем Unicode-версии WinAPI
-target_compile_definitions(pacs_service
-  PRIVATE
-    UNICODE
-    _UNICODE
-)
-
-# MSVC: UTF-8
 if (MSVC)
+  target_compile_definitions(pacs_service PRIVATE UNICODE _UNICODE)
   target_compile_options(pacs_service PRIVATE /utf-8)
 endif()

@@ -1,33 +1,55 @@
-#include "Config.h"
-#include <nlohmann/json.hpp>
-#include <fstream>
-#include <stdexcept>
-#include <windows.h>
+﻿#include "Config.h"
 
-static std::wstring ExpandEnv(const std::wstring& s) {
-    wchar_t buf[4096];
-    DWORD n = ExpandEnvironmentStringsW(s.c_str(), buf, 4096);
-    if (n == 0 || n > 4096) return s;
+#include <windows.h>
+#include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
+
+using nlohmann::json;
+namespace fs = std::filesystem;
+
+static std::wstring GetProgramData() {
+    wchar_t buf[MAX_PATH]{};
+    DWORD n = GetEnvironmentVariableW(L"ProgramData", buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return L"C:\\ProgramData";
     return std::wstring(buf);
 }
 
-Config Config::Load(const std::wstring& inPath) {
-    auto p = std::filesystem::path(ExpandEnv(inPath));
-    std::ifstream f(p, std::ios::binary);
-    if (!f) throw std::runtime_error("Cannot open config file");
+static std::wstring DefaultConfigPath() {
+    auto base = GetProgramData() + L"\\PacsCpp";
+    fs::create_directories(base);
+    return base + L"\\config.json";
+}
 
-    nlohmann::json j;
-    f >> j;
+Config Config::Load() {
+    return Load(DefaultConfigPath());
+}
 
-    Config c;
-    if (j.contains("AETitle"))     c.aeTitle = j["AETitle"].get<std::string>();
-    if (j.contains("Port"))        c.port = j["Port"].get<unsigned short>();
-    if (j.contains("StoragePath")) {
-        const std::string s = j["StoragePath"].get<std::string>();
-        c.storagePath = std::filesystem::path(std::wstring(s.begin(), s.end()));
+Config Config::Load(const std::wstring& path) {
+    Config cfg;
+    // Значения по умолчанию
+    cfg.storageRoot = GetProgramData() + L"\\PacsCpp\\storage";
+    cfg.dbConn = ""; // пустая строка -> БД не используем
+
+    try {
+        fs::create_directories(cfg.storageRoot);
+
+        // Пытаемся прочитать JSON, если файл существует
+        std::ifstream f(fs::path(path).string(), std::ios::binary);
+        if (f.good()) {
+            json j; f >> j;
+            if (j.contains("storage_root")) {
+                auto sr = j["storage_root"].get<std::string>();
+                cfg.storageRoot.assign(sr.begin(), sr.end()); // простая конверсия
+                fs::create_directories(cfg.storageRoot);
+            }
+            if (j.contains("db_conn")) {
+                cfg.dbConn = j["db_conn"].get<std::string>();
+            }
+        }
     }
-    if (j.contains("PostgresUri")) c.pgUri = j["PostgresUri"].get<std::string>();
-    if (j.contains("MaxPdu"))      c.maxPdu = j["MaxPdu"].get<unsigned int>();
-    if (j.contains("AcceptedAEs")) c.acceptedAEs = j["AcceptedAEs"].get<std::vector<std::string>>();
-    return c;
+    catch (...) {
+        // игнорируем: оставим значения по умолчанию
+    }
+    return cfg;
 }

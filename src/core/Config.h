@@ -1,15 +1,17 @@
-#pragma once
+﻿#pragma once
 #include <string>
-#include <vector>
-#include <filesystem>
 
 struct Config {
-	std::string aeTitle{ "PACS_CPP" };
-	unsigned short port{ 11112 };
-	std::filesystem::path storagePath{ L"C:\\PACS\\Storage" };
-	std::string pgUri{ "postgresql://orthanc:orthanc@localhost:5432/orthanc" };
-	unsigned int maxPdu{ 4u * 1024u * 1024u };
-	std::vector<std::string> acceptedAEs{ "*" };
+    std::wstring storageRoot;  // куда складывать данные/логи
+    std::string  dbConn;       // строка подключения к Postgres; пустая = БД нет
 
-	static Config Load(const std::wstring& path);
+    // Загрузить конфиг из стандартного места: %ProgramData%\PacsCpp\config.json
+    static Config Load();
+
+    // Явная загрузка из указанного пути
+    static Config Load(const std::wstring& path);
+
+    // Удобные геттеры (под ожидания вашего кода)
+    std::wstring StorageRootW() const { return storageRoot; }
+    std::string  DbConnString() const { return dbConn; }
 };

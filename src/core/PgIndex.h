@@ -1,18 +1,26 @@
-#pragma once
-#include <pqxx/pqxx>
-#include <optional>
+﻿#pragma once
 #include <string>
-#include <cstdint>
+#include <memory>
+#include <pqxx/pqxx> 
+
+namespace pqxx { class connection; }
 
 class PgIndex {
 public:
-	explicit PgIndex(const std::string& uri);
+    using Rid = long long;
 
-	long UpsertResource(int type, std::optional<long> parent, const std::string& publicId);
-	void UpsertIdentifier(long rid, int g, int e, const std::string& valUpper);
-	void UpsertMainTag(long rid, int g, int e, const std::string& val);
-	void AttachDicom(long rid, const std::string& uuid, std::uint64_t size);
+    PgIndex() = default;
+    explicit PgIndex(const std::string& conn);
+    ~PgIndex();                       // <— добавили явный деструктор (см. реализацию в .cpp)
+
+    bool Open(const std::string& conn);
+    bool Connected() const;
+
+    // Заглушки под вызовы сервера
+    Rid  UpsertResource(const std::string& kind, const std::string& uid);
+    void UpsertIdentifier(Rid rid, const std::string& system, const std::string& value);
+    void AttachDicom(Rid rid, const std::wstring& path);
 
 private:
-	pqxx::connection conn_;
+    std::unique_ptr<pqxx::connection> conn_;
 };
